@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "MediShop Inventory",
+    "slug": "medishop-inventory",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "MediShop needs camera access to scan medicine barcodes at the counter."
+      }
+    },
+    "android": {
+      "package": "com.medishop.inventory",
+      "permissions": ["CAMERA"]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "MediShop needs camera access to scan medicine barcodes at the counter."
+        }
+      ]
+    ]
+  }
+}
