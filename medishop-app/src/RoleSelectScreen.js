@@ -1,32 +1,82 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, SafeAreaView, Alert } from "react-native";
-import { hashPin } from "./pin";
 
-// Every counter option is just a label — no separate Firebase login per
-// staff member, since that would need a backend admin step this
-// client-only app doesn't have. The Owner option is the one that matters
-// for security: it's gated behind the shop's PIN (set in Owner Dashboard
-// > Change PIN) because Owner can edit/void other people's sales and see
-// money totals. Counter roles need no PIN — anyone handed the shop phone
-// can ring up a sale, but they can't touch anything after it's submitted.
 const COUNTERS = ["Counter 1", "Counter 2", "Counter 3"];
 
-export default function RoleSelectScreen({ shopName, ownerPinHash, onSelectRole }) {
+// Fix #4: Brute-force lockout.
+// After MAX_ATTEMPTS wrong PINs the entry UI is locked for an escalating
+// duration. Durations (in seconds): 30s, 2m, 5m, 10m, 30m.
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_DURATIONS_S = [30, 120, 300, 600, 1800];
+
+// Fix #10: receives verifyOwnerPin(pin) → Promise<boolean> instead of
+// the raw ownerPinHash string, so the hash never appears in this
+// component's props or state.
+export default function RoleSelectScreen({ shopName, verifyOwnerPin, onSelectRole }) {
   const [pinEntryOpen, setPinEntryOpen] = useState(false);
   const [pin, setPin] = useState("");
   const [checking, setChecking] = useState(false);
 
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockoutExpiry, setLockoutExpiry] = useState(null); // timestamp ms
+  const [countdown, setCountdown] = useState(0);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (!lockoutExpiry) {
+      clearInterval(timerRef.current);
+      setCountdown(0);
+      return;
+    }
+    function tick() {
+      const remaining = Math.ceil((lockoutExpiry - Date.now()) / 1000);
+      if (remaining <= 0) {
+        setLockoutExpiry(null);
+        clearInterval(timerRef.current);
+      } else {
+        setCountdown(remaining);
+      }
+    }
+    tick();
+    timerRef.current = setInterval(tick, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [lockoutExpiry]);
+
+  const isLocked = lockoutExpiry && Date.now() < lockoutExpiry;
+
   async function submitPin() {
+    if (isLocked) return;
     setChecking(true);
-    const enteredHash = await hashPin(pin);
-    setChecking(false);
-    if (enteredHash === ownerPinHash) {
-      setPin("");
-      setPinEntryOpen(false);
-      onSelectRole({ type: "owner", label: "Owner" });
-    } else {
-      Alert.alert("Wrong PIN", "That PIN doesn't match. Ask the shop owner for the current PIN.");
-      setPin("");
+    try {
+      const ok = await verifyOwnerPin(pin);
+      if (ok) {
+        setPin("");
+        setFailedAttempts(0);
+        setLockoutExpiry(null);
+        setPinEntryOpen(false);
+        onSelectRole({ type: "owner", label: "Owner" });
+      } else {
+        const next = failedAttempts + 1;
+        setFailedAttempts(next);
+        setPin("");
+        if (next >= MAX_ATTEMPTS) {
+          const durationIdx = Math.min(next - MAX_ATTEMPTS, LOCKOUT_DURATIONS_S.length - 1);
+          setLockoutExpiry(Date.now() + LOCKOUT_DURATIONS_S[durationIdx] * 1000);
+          Alert.alert(
+            "Too many wrong PINs",
+            `PIN entry locked for ${formatDuration(LOCKOUT_DURATIONS_S[durationIdx])}.`
+          );
+        } else {
+          Alert.alert(
+            "Wrong PIN",
+            `That PIN doesn't match. ${MAX_ATTEMPTS - next} attempt${MAX_ATTEMPTS - next === 1 ? "" : "s"} remaining before lockout.`
+          );
+        }
+      }
+    } catch {
+      Alert.alert("Error", "Could not verify PIN. Check your connection and try again.");
+    } finally {
+      setChecking(false);
     }
   }
 
@@ -49,16 +99,25 @@ export default function RoleSelectScreen({ shopName, ownerPinHash, onSelectRole 
         ) : (
           <View style={styles.pinBox}>
             <Text style={styles.pinLabel}>Enter owner PIN</Text>
-            <TextInput
-              style={styles.pinInput}
-              placeholder="PIN"
-              keyboardType="numeric"
-              secureTextEntry
-              value={pin}
-              onChangeText={setPin}
-              autoFocus
-            />
-            <TouchableOpacity style={styles.ownerBtn} onPress={submitPin} disabled={checking}>
+            {isLocked ? (
+              <Text style={styles.lockText}>Locked — try again in {formatDuration(countdown)}</Text>
+            ) : (
+              <TextInput
+                style={styles.pinInput}
+                placeholder="PIN"
+                keyboardType="numeric"
+                secureTextEntry
+                value={pin}
+                onChangeText={setPin}
+                autoFocus
+                maxLength={6}
+              />
+            )}
+            <TouchableOpacity
+              style={[styles.ownerBtn, (isLocked || checking) && styles.ownerBtnDisabled]}
+              onPress={submitPin}
+              disabled={isLocked || checking}
+            >
               <Text style={styles.ownerBtnText}>{checking ? "Checking..." : "Continue as Owner"}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setPinEntryOpen(false); setPin(""); }}>
@@ -69,6 +128,11 @@ export default function RoleSelectScreen({ shopName, ownerPinHash, onSelectRole 
       </View>
     </SafeAreaView>
   );
+}
+
+function formatDuration(seconds) {
+  if (seconds >= 60) return `${Math.ceil(seconds / 60)}m`;
+  return `${seconds}s`;
 }
 
 const styles = StyleSheet.create({
@@ -92,6 +156,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 12,
   },
+  ownerBtnDisabled: { backgroundColor: "#999" },
   ownerBtnText: { fontSize: 15, fontWeight: "600", color: "#fff" },
   pinBox: { marginTop: 12 },
   pinLabel: { fontSize: 13, color: "#666", marginBottom: 8, textAlign: "center" },
@@ -106,5 +171,6 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
     marginBottom: 10,
   },
+  lockText: { color: "#c0392b", textAlign: "center", fontSize: 13, marginBottom: 10, fontWeight: "600" },
   cancelText: { textAlign: "center", color: "#888", fontSize: 13, marginTop: 12 },
 });

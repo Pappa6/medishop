@@ -19,7 +19,6 @@ import {
   netPrice,
   netPiecePrice,
   formatStock,
-  randomBatch,
   GST_PERCENT,
 } from "./src/catalog";
 import { loadStock, saveStock, loadLog, saveLog, loadPending, savePending, loadSettings, saveSettings } from "./src/storage";
@@ -27,17 +26,26 @@ import { watchAuthState, logOutShop } from "./src/auth";
 import AuthScreen from "./src/AuthScreen";
 import BarcodeScanner from "./src/BarcodeScanner";
 import RoleSelectScreen from "./src/RoleSelectScreen";
-import { hashPin } from "./src/pin";
+import { hashPin, verifyPin } from "./src/pin";
 
-// Staff-vs-owner is a role picked on this device after shop login (see
-// RoleSelectScreen) — not a separate Firebase account per person. See that
-// file's comment for why.
+// Fix #5: escapeHtml prevents XSS when user-supplied strings (shop name,
+// patient name, medicine names) are interpolated into the printed bill's
+// HTML. Without escaping, a shop named "<script>...</script>" would
+// execute arbitrary JS inside the expo-print WebView.
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
 export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
-  const [shop, setShop] = useState(null); // { shopId, shopName } | null
-  const [role, setRole] = useState(null); // { type: "counter"|"owner", label } | null
-  const [settings, setSettings] = useState({ ownerPinHash: null });
+  const [shop, setShop] = useState(null);
+  const [role, setRole] = useState(null);
+  const [settings, setSettings] = useState({ ownerPinHash: null, pinChangeRequired: false });
 
   const [catalog, setCatalog] = useState([]);
   const [log, setLog] = useState([]);
@@ -55,7 +63,6 @@ export default function App() {
   const [doctorName, setDoctorName] = useState("");
   const [toast, setToast] = useState("");
 
-  // Add-new-medicine form state
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("fever");
@@ -66,6 +73,9 @@ export default function App() {
   const [newLooseAllowed, setNewLooseAllowed] = useState(false);
   const [newPiecesPerUnit, setNewPiecesPerUnit] = useState("");
   const [newBarcode, setNewBarcode] = useState("");
+  // Fix #8: batch number and expiry are now real fields on each medicine.
+  const [newBatch, setNewBatch] = useState("");
+  const [newExpiry, setNewExpiry] = useState("");
 
   useEffect(() => {
     const unsubscribe = watchAuthState((result) => {
@@ -96,16 +106,44 @@ export default function App() {
     );
   }
 
-  if (!shop) {
-    return <AuthScreen />;
+  if (!shop) return <AuthScreen />;
+
+  // Fix #10: verifyOwnerPin fetches settings fresh from Firestore on each
+  // attempt so the raw hash is never stored in RoleSelectScreen's props.
+  // Falls back to the cached copy only if the network call fails.
+  async function verifyOwnerPin(pin) {
+    if (!settings.ownerPinHash) {
+      Alert.alert(
+        "Settings error",
+        "Owner PIN settings could not be loaded. Please log out and back in."
+      );
+      return false;
+    }
+    try {
+      const fresh = await loadSettings(shop.shopId);
+      if (!fresh.ownerPinHash) return false;
+      return verifyPin(pin, fresh.ownerPinHash);
+    } catch {
+      return verifyPin(pin, settings.ownerPinHash);
+    }
   }
 
   if (!role) {
     return (
       <RoleSelectScreen
         shopName={shop.shopName}
-        ownerPinHash={settings.ownerPinHash}
+        verifyOwnerPin={verifyOwnerPin}
         onSelectRole={setRole}
+      />
+    );
+  }
+
+  // Fix #3: Block owner dashboard access until the default PIN is replaced.
+  if (role.type === "owner" && settings.pinChangeRequired) {
+    return (
+      <MandatoryPinChangeScreen
+        changeOwnerPin={changeOwnerPin}
+        onDone={() => setRole(null)}
       />
     );
   }
@@ -127,9 +165,6 @@ export default function App() {
 
   function findByScannedCode(code) {
     const trimmed = (code || "").trim();
-    // Barcode field is the real-world lookup; falling back to matching the
-    // catalog id lets a shop print/use their own QR labels on loose stock
-    // that never had a manufacturer barcode (e.g. hand-labelled jars).
     return catalog.find((m) => m.barcode === trimmed) || catalog.find((m) => m.id === trimmed);
   }
 
@@ -140,7 +175,7 @@ export default function App() {
     if (!item) {
       Alert.alert(
         "Not found in stock",
-        `Scanned code "${code}" doesn't match any medicine in your catalog yet. Add it from the Owner dashboard.`
+        `Scanned code "${code}" doesn't match any medicine in your catalog yet.`
       );
       return;
     }
@@ -158,14 +193,9 @@ export default function App() {
   function changeQty(id, direction) {
     const item = byId(id);
     if (!item) return;
-    // One piece/unit at a time on the +/- buttons, even for loose-allowed
-    // medicines — a counter person fine-tunes 1 extra tablet at a time here.
-    // Scanning a strip (onBarcodeScanned above) still adds a full strip in
-    // one go, since that's what scanning a strip physically means.
-    const step = 1;
     setCart((prev) => {
       const current = prev[id] || 0;
-      let next = current + direction * step;
+      let next = current + direction;
       if (next < 0) next = 0;
       if (next > item.stock) next = item.stock;
       return { ...prev, [id]: next };
@@ -182,8 +212,7 @@ export default function App() {
       setCart((prev) => ({ ...prev, [id]: 0 }));
       return;
     }
-    const clamped = Math.min(n, item.stock);
-    setCart((prev) => ({ ...prev, [id]: clamped }));
+    setCart((prev) => ({ ...prev, [id]: Math.min(n, item.stock) }));
   }
 
   const cartLines = Object.entries(cart)
@@ -194,10 +223,6 @@ export default function App() {
     })
     .filter(Boolean);
 
-  // Keep full paise precision through the GST math — rounding the subtotal
-  // to a whole rupee first (the old bug) was truncating amounts like
-  // Rs 1.20 down to Rs 1.00. Only the final displayed/stored numbers are
-  // rounded to 2 decimal places, right at the end.
   const rawSubtotal = cartLines.reduce((sum, l) => sum + l.lineTotal, 0);
   const subtotal = Math.round(rawSubtotal * 100) / 100;
   const gstAmount = Math.round(subtotal * GST_PERCENT) / 100;
@@ -208,9 +233,6 @@ export default function App() {
     setShowBillForm(true);
   }
 
-  // Counter side: submit the bill for the owner to check, instead of
-  // deducting stock and printing immediately. Nothing touches the real
-  // stock numbers until the owner approves it below.
   async function submitForApproval() {
     const itemsDetail = [];
     cartLines.forEach((l) => {
@@ -220,14 +242,18 @@ export default function App() {
         qty: l.qty,
         soldAs: l.item.looseAllowed ? "loose (pieces)" : l.item.unit,
         unitPrice: unitPriceOf(l.item),
-        batch: randomBatch(),
-        expiry: "12/2026",
+        // Fix #8: use the medicine's actual batch and expiry instead of
+        // a randomly generated fake. Shows "—" when not yet recorded.
+        batch: l.item.batch || "",
+        expiry: l.item.expiry || "",
       });
     });
     if (itemsDetail.length === 0) return;
 
+    // Fix #7: crypto.randomUUID() instead of Date.now() — two bills
+    // submitted in the same millisecond no longer collide.
     const entry = {
-      id: Date.now(),
+      id: crypto.randomUUID(),
       type: "sale",
       voided: false,
       counter: role.label,
@@ -257,8 +283,6 @@ export default function App() {
     setTimeout(() => setToast(""), 2500);
   }
 
-  // Owner side: this is the point stock actually gets deducted and the
-  // sale becomes final. Printing only happens from here, after approval.
   async function approveSale(entry) {
     const updatedCatalog = catalog.map((m) => {
       const sold = entry.items.find((it) => it.id === m.id);
@@ -289,7 +313,7 @@ export default function App() {
       return sold ? { ...m, stock: m.stock + sold.qty } : m;
     });
     const reversal = {
-      id: Date.now(),
+      id: crypto.randomUUID(), // Fix #7
       type: "reversal",
       linkedTo: entry.id,
       counter: entry.counter,
@@ -321,16 +345,18 @@ export default function App() {
     }
   }
 
+  // Returns true on success, false on validation failure.
   async function changeOwnerPin(newPin) {
     if (!/^\d{4,6}$/.test(newPin)) {
       Alert.alert("Invalid PIN", "Use 4 to 6 digits, numbers only.");
-      return;
+      return false;
     }
     const ownerPinHash = await hashPin(newPin);
-    const updatedSettings = { ...settings, ownerPinHash };
+    // pinChangeRequired cleared so the forced-change gate doesn't re-trigger.
+    const updatedSettings = { ...settings, ownerPinHash, pinChangeRequired: false };
     setSettings(updatedSettings);
     await saveSettings(shop.shopId, updatedSettings);
-    Alert.alert("PIN updated", "The new PIN takes effect immediately — anyone still on the Owner role in this session isn't affected, but the next role switch needs the new PIN.");
+    return true;
   }
 
   async function loadDefaultCatalogNow() {
@@ -353,14 +379,6 @@ export default function App() {
     );
   }
 
-  function slugify(name) {
-    const base = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "")
-      .slice(0, 10);
-    return base + Date.now().toString().slice(-5);
-  }
-
   function resetAddForm() {
     setNewName("");
     setNewCategory("fever");
@@ -371,6 +389,8 @@ export default function App() {
     setNewLooseAllowed(false);
     setNewPiecesPerUnit("");
     setNewBarcode("");
+    setNewBatch("");
+    setNewExpiry("");
     setShowAddForm(false);
   }
 
@@ -381,36 +401,30 @@ export default function App() {
     const discount = newDiscount ? parseFloat(newDiscount) : 0;
     const piecesPerUnit = newLooseAllowed ? parseInt(newPiecesPerUnit, 10) : null;
 
-    if (!name) {
-      Alert.alert("Missing name", "Please enter the medicine name.");
-      return;
-    }
-    if (isNaN(price) || price <= 0) {
-      Alert.alert("Invalid price", "Please enter a valid price per " + (newUnit || "unit") + ".");
-      return;
-    }
-    if (isNaN(stockUnits) || stockUnits < 0) {
-      Alert.alert("Invalid stock", "Please enter how many " + (newUnit || "units") + " are in stock.");
-      return;
-    }
+    if (!name) { Alert.alert("Missing name", "Please enter the medicine name."); return; }
+    if (isNaN(price) || price <= 0) { Alert.alert("Invalid price", "Please enter a valid price."); return; }
+    if (isNaN(stockUnits) || stockUnits < 0) { Alert.alert("Invalid stock", "Please enter stock quantity."); return; }
     if (newLooseAllowed && (isNaN(piecesPerUnit) || piecesPerUnit <= 0)) {
-      Alert.alert("Invalid pieces per strip", "Please enter how many tablets/pieces are in one " + (newUnit || "strip") + ".");
+      Alert.alert("Invalid pieces per strip", "Please enter tablets per strip.");
       return;
     }
 
-    const stockInPieces = newLooseAllowed ? stockUnits * piecesPerUnit : stockUnits;
-
+    // Fix #7: medicine id uses crypto.randomUUID() instead of the
+    // timestamp-suffix slug that collided when two items were added rapidly.
     const newItem = {
-      id: slugify(name || "med"),
+      id: crypto.randomUUID(),
       name,
       category: newCategory,
       price,
       unit: newUnit.trim() || "strip",
       looseAllowed: newLooseAllowed,
       piecesPerUnit: newLooseAllowed ? piecesPerUnit : undefined,
-      stock: stockInPieces,
+      stock: newLooseAllowed ? stockUnits * piecesPerUnit : stockUnits,
       discount,
       barcode: newBarcode.trim() || undefined,
+      // Fix #8: actual batch and expiry recorded at medicine-add time.
+      batch: newBatch.trim() || "",
+      expiry: newExpiry.trim() || "",
     };
 
     const updatedCatalog = [...catalog, newItem];
@@ -453,10 +467,7 @@ export default function App() {
             )}
             <TouchableOpacity
               style={styles.smallBtn}
-              onPress={() => {
-                setShowOwnerPanel(false);
-                setRole(null);
-              }}
+              onPress={() => { setShowOwnerPanel(false); setRole(null); }}
             >
               <Text style={styles.smallBtnText}>Switch role</Text>
             </TouchableOpacity>
@@ -500,6 +511,10 @@ export default function App() {
             setNewPiecesPerUnit={setNewPiecesPerUnit}
             newBarcode={newBarcode}
             setNewBarcode={setNewBarcode}
+            newBatch={newBatch}
+            setNewBatch={setNewBatch}
+            newExpiry={newExpiry}
+            setNewExpiry={setNewExpiry}
             addNewMedicine={addNewMedicine}
           />
         ) : (
@@ -523,15 +538,12 @@ export default function App() {
               <Text style={styles.scanBtnText}>📷 Scan a strip or box</Text>
             </TouchableOpacity>
 
-            <Text style={styles.sectionLabel}>Search all medicines (any medicine, with or without prescription)</Text>
+            <Text style={styles.sectionLabel}>Search all medicines</Text>
             <TextInput
               style={styles.searchInput}
               placeholder="Type medicine name..."
               value={searchText}
-              onChangeText={(t) => {
-                setSearchText(t);
-                setVisibleIds([]);
-              }}
+              onChangeText={(t) => { setSearchText(t); setVisibleIds([]); }}
             />
             {searchText.trim().length > 0 &&
               (searchResults.length === 0 ? (
@@ -643,53 +655,91 @@ export default function App() {
   );
 }
 
+// Fix #3: Shown to the owner the first time they log in (or whenever
+// pinChangeRequired is true) before they can access the dashboard.
+function MandatoryPinChangeScreen({ changeOwnerPin, onDone }) {
+  const [pin1, setPin1] = useState("");
+  const [pin2, setPin2] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function handleSave() {
+    if (pin1 !== pin2) {
+      Alert.alert("PINs don't match", "Type the same PIN in both boxes.");
+      return;
+    }
+    setBusy(true);
+    const ok = await changeOwnerPin(pin1);
+    setBusy(false);
+    if (ok) {
+      Alert.alert("PIN set", "Your owner PIN has been saved. Tap OK to continue.", [
+        { text: "OK", onPress: onDone },
+      ]);
+    }
+    setPin1("");
+    setPin2("");
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
+        <Text style={styles.shopName}>Set your owner PIN</Text>
+        <Text style={[styles.itemMeta, { textAlign: "center", marginBottom: 20 }]}>
+          The default PIN must be changed before you can access the owner dashboard.
+          Choose a PIN only you know (4–6 digits).
+        </Text>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="New PIN (4–6 digits)"
+          keyboardType="numeric"
+          secureTextEntry
+          value={pin1}
+          onChangeText={setPin1}
+          maxLength={6}
+        />
+        <TextInput
+          style={[styles.searchInput, { marginTop: 10 }]}
+          placeholder="Confirm PIN"
+          keyboardType="numeric"
+          secureTextEntry
+          value={pin2}
+          onChangeText={setPin2}
+          maxLength={6}
+        />
+        <TouchableOpacity style={[styles.confirmBtn, { marginTop: 16 }]} onPress={handleSave} disabled={busy}>
+          <Text style={styles.confirmBtnText}>{busy ? "Saving..." : "Save PIN and continue"}</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 function OwnerDashboard({
-  catalog,
-  log,
-  pending,
-  approveSale,
-  rejectSale,
-  changeOwnerPin,
-  activeVoidId,
-  setActiveVoidId,
-  reasonText,
-  setReasonText,
-  voidEntry,
-  onLoadDefaultCatalog,
-  showAddForm,
-  setShowAddForm,
-  newName,
-  setNewName,
-  newCategory,
-  setNewCategory,
-  newUnit,
-  setNewUnit,
-  newPrice,
-  setNewPrice,
-  newStock,
-  setNewStock,
-  newDiscount,
-  setNewDiscount,
-  newLooseAllowed,
-  setNewLooseAllowed,
-  newPiecesPerUnit,
-  setNewPiecesPerUnit,
-  newBarcode,
-  setNewBarcode,
+  catalog, log, pending, approveSale, rejectSale, changeOwnerPin,
+  activeVoidId, setActiveVoidId, reasonText, setReasonText, voidEntry,
+  onLoadDefaultCatalog, showAddForm, setShowAddForm,
+  newName, setNewName, newCategory, setNewCategory,
+  newUnit, setNewUnit, newPrice, setNewPrice,
+  newStock, setNewStock, newDiscount, setNewDiscount,
+  newLooseAllowed, setNewLooseAllowed, newPiecesPerUnit, setNewPiecesPerUnit,
+  newBarcode, setNewBarcode,
+  newBatch, setNewBatch, newExpiry, setNewExpiry,
   addNewMedicine,
 }) {
   const categoryEntries = Object.entries(CATEGORY_LABELS);
   const [newPin1, setNewPin1] = useState("");
   const [newPin2, setNewPin2] = useState("");
 
-  function submitPinChange() {
+  async function submitPinChange() {
     if (newPin1 !== newPin2) {
       Alert.alert("PINs don't match", "Type the same PIN in both boxes.");
       return;
     }
-    changeOwnerPin(newPin1);
-    setNewPin1("");
-    setNewPin2("");
+    const ok = await changeOwnerPin(newPin1);
+    if (ok) {
+      setNewPin1("");
+      setNewPin2("");
+      Alert.alert("PIN updated", "New PIN takes effect immediately.");
+    }
   }
 
   return (
@@ -699,7 +749,7 @@ function OwnerDashboard({
       </Text>
       <View style={styles.panel}>
         {pending.length === 0 && (
-          <Text style={styles.emptyText}>No bills waiting — counter bills will show up here first.</Text>
+          <Text style={styles.emptyText}>No bills waiting.</Text>
         )}
         {pending.map((entry) => (
           <View key={entry.id} style={styles.billBox}>
@@ -711,9 +761,7 @@ function OwnerDashboard({
             )}
             {entry.items.map((it) => (
               <View key={it.id} style={styles.billRow}>
-                <Text style={styles.billItemText}>
-                  {it.name} x{it.qty}
-                </Text>
+                <Text style={styles.billItemText}>{it.name} x{it.qty}</Text>
                 <Text style={styles.billItemText}>Rs. {(it.unitPrice * it.qty).toFixed(2)}</Text>
               </View>
             ))}
@@ -807,7 +855,7 @@ function OwnerDashboard({
             </>
           )}
 
-          <Text style={styles.formLabel}>Barcode (optional — scan or type the number printed on the strip/box)</Text>
+          <Text style={styles.formLabel}>Barcode (optional)</Text>
           <TextInput
             style={styles.formInput}
             placeholder="e.g. 8901234567890"
@@ -815,6 +863,18 @@ function OwnerDashboard({
             value={newBarcode}
             onChangeText={setNewBarcode}
           />
+
+          {/* Fix #8: batch and expiry fields so bills carry real, traceable values */}
+          <View style={styles.formRow}>
+            <View style={{ flex: 1, marginRight: 6 }}>
+              <Text style={styles.formLabel}>Batch no. (from box)</Text>
+              <TextInput style={styles.formInput} placeholder="e.g. B427" value={newBatch} onChangeText={setNewBatch} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 6 }}>
+              <Text style={styles.formLabel}>Expiry (MM/YYYY)</Text>
+              <TextInput style={styles.formInput} placeholder="e.g. 06/2027" value={newExpiry} onChangeText={setNewExpiry} />
+            </View>
+          </View>
 
           <TouchableOpacity style={[styles.confirmBtn, { marginTop: 12 }]} onPress={addNewMedicine}>
             <Text style={styles.confirmBtnText}>Save medicine to stock</Text>
@@ -824,7 +884,7 @@ function OwnerDashboard({
 
       <Text style={styles.sectionLabel}>Current stock ({catalog.length} items)</Text>
       <View style={styles.panel}>
-        {catalog.length === 0 && <Text style={styles.emptyText}>No stock yet — tap "Load latest medicine catalog" above.</Text>}
+        {catalog.length === 0 && <Text style={styles.emptyText}>No stock yet.</Text>}
         {catalog.map((m) => (
           <View key={m.id} style={styles.stockRow}>
             <Text style={styles.stockName}>{m.name}</Text>
@@ -896,6 +956,7 @@ function OwnerDashboard({
             secureTextEntry
             value={newPin1}
             onChangeText={setNewPin1}
+            maxLength={6}
           />
           <TextInput
             style={[styles.formInput, { flex: 1, marginLeft: 6 }]}
@@ -904,6 +965,7 @@ function OwnerDashboard({
             secureTextEntry
             value={newPin2}
             onChangeText={setNewPin2}
+            maxLength={6}
           />
         </View>
         <TouchableOpacity style={[styles.confirmBtn, { marginTop: 10 }]} onPress={submitPinChange}>
@@ -914,15 +976,17 @@ function OwnerDashboard({
   );
 }
 
+// Fix #5: All user-supplied values are passed through escapeHtml() before
+// being interpolated into the HTML string for the printed bill.
 function buildBillHtml(sale, shop) {
   const rows = sale.items
     .map(
       (it) => `
       <tr>
-        <td>${it.name}</td>
-        <td style="text-align:center">${it.qty}</td>
-        <td style="text-align:center">${it.batch}</td>
-        <td style="text-align:center">${it.expiry}</td>
+        <td>${escapeHtml(it.name)}</td>
+        <td style="text-align:center">${escapeHtml(it.qty)}</td>
+        <td style="text-align:center">${escapeHtml(it.batch || "—")}</td>
+        <td style="text-align:center">${escapeHtml(it.expiry || "—")}</td>
         <td style="text-align:right">Rs. ${Math.round(it.unitPrice * it.qty)}</td>
       </tr>`
     )
@@ -930,9 +994,9 @@ function buildBillHtml(sale, shop) {
   return `
     <html>
       <body style="font-family: Arial, sans-serif; padding: 24px;">
-        <h2 style="margin-bottom:0">${shop.shopName}</h2>
-        <p style="color:#666; margin-top:4px">${sale.date || ""} ${sale.time || ""}</p>
-        <p>Patient: ${sale.patientName || "-"} &nbsp;&nbsp; Doctor: ${sale.doctorName || "-"}</p>
+        <h2 style="margin-bottom:0">${escapeHtml(shop.shopName)}</h2>
+        <p style="color:#666; margin-top:4px">${escapeHtml(sale.date || "")} ${escapeHtml(sale.time || "")}</p>
+        <p>Patient: ${escapeHtml(sale.patientName || "—")} &nbsp;&nbsp; Doctor: ${escapeHtml(sale.doctorName || "—")}</p>
         <table style="width:100%; border-collapse:collapse; margin-top:12px;">
           <thead>
             <tr style="border-bottom:1px solid #333;">

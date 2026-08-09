@@ -118,9 +118,3 @@ export function formatStock(item) {
   return `${item.stock} ${item.unit}${item.stock === 1 ? "" : "s"}`;
 }
 
-export function randomBatch() {
-  const letters = "ABCDEFGH";
-  const l = letters[Math.floor(Math.random() * letters.length)];
-  const n = Math.floor(100 + Math.random() * 900);
-  return `${l}${n}`;
-}
