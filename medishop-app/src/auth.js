@@ -9,11 +9,6 @@ import { auth, db } from "./firebaseConfig";
 import { DEFAULT_CATALOG } from "./catalog";
 import { hashPin } from "./pin";
 
-// The Firebase user's uid IS the shop's tenant id everywhere else in the
-// app (storage.js). This is what makes one app build work for every shop:
-// every read/write is scoped under shops/{uid}/... and Firebase's own
-// auth rules keep one shop from ever reading another shop's data.
-
 export async function signUpShop(shopName, email, password) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   const shopId = cred.user.uid;
@@ -22,21 +17,22 @@ export async function signUpShop(shopName, email, password) {
     name: shopName,
     createdAt: Date.now(),
   });
-  // Seed this new shop with the starter catalog so it has something to
-  // sell on day one. The shop owner can edit/replace this later from a
-  // catalog-management screen (see README "Next steps").
   await setDoc(doc(db, "shops", shopId, "data", "stock"), {
     items: DEFAULT_CATALOG,
   });
   await setDoc(doc(db, "shops", shopId, "data", "salesLog"), {
     entries: [],
   });
-  // Default PIN so the shop can log in as Owner on day one — the README
-  // and the Owner Dashboard's "Change PIN" section both point out that
-  // this should be changed before the shop actually opens. Stored as a
-  // hash, never as plain text.
+  await setDoc(doc(db, "shops", shopId, "data", "pendingSales"), {
+    entries: [],
+  });
+  // Fix #3: pinChangeRequired forces the owner to set a real PIN before
+  // they can use the dashboard. The default "0000" is only ever stored as
+  // a PBKDF2 hash (fix #1), but any default PIN is a risk if forgotten to
+  // change, so we block access to the owner role until it is replaced.
   await setDoc(doc(db, "shops", shopId, "data", "settings"), {
     ownerPinHash: await hashPin("0000"),
+    pinChangeRequired: true,
   });
 
   return shopId;
@@ -52,7 +48,6 @@ export function logOutShop() {
 }
 
 export function watchAuthState(callback) {
-  // callback receives either null (logged out) or { shopId, shopName }
   return onAuthStateChanged(auth, async (user) => {
     if (!user) {
       callback(null);
