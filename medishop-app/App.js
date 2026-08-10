@@ -64,6 +64,7 @@ export default function App() {
   const [toast, setToast] = useState("");
 
   const [showAddForm, setShowAddForm] = useState(false);
+  const [isAddingMedicine, setIsAddingMedicine] = useState(false);
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("fever");
   const [newUnit, setNewUnit] = useState("strip");
@@ -395,6 +396,8 @@ export default function App() {
   }
 
   async function addNewMedicine() {
+    if (isAddingMedicine) return; // prevent double-press
+
     const name = newName.trim();
     const price = parseFloat(newPrice);
     const stockUnits = parseInt(newStock, 10);
@@ -409,30 +412,55 @@ export default function App() {
       return;
     }
 
-    // Fix #7: medicine id uses crypto.randomUUID() instead of the
-    // timestamp-suffix slug that collided when two items were added rapidly.
-    const newItem = {
-      id: crypto.randomUUID(),
-      name,
-      category: newCategory,
-      price,
-      unit: newUnit.trim() || "strip",
-      looseAllowed: newLooseAllowed,
-      piecesPerUnit: newLooseAllowed ? piecesPerUnit : undefined,
-      stock: newLooseAllowed ? stockUnits * piecesPerUnit : stockUnits,
-      discount,
-      barcode: newBarcode.trim() || undefined,
-      // Fix #8: actual batch and expiry recorded at medicine-add time.
-      batch: newBatch.trim() || "",
-      expiry: newExpiry.trim() || "",
-    };
+    setIsAddingMedicine(true);
+    try {
+      const incomingStock = newLooseAllowed ? stockUnits * piecesPerUnit : stockUnits;
 
-    const updatedCatalog = [...catalog, newItem];
-    setCatalog(updatedCatalog);
-    await saveStock(shop.shopId, updatedCatalog);
-    setToast(`"${name}" added to stock`);
-    setTimeout(() => setToast(""), 2000);
-    resetAddForm();
+      // If a medicine with the same name already exists, update its stock
+      // instead of creating a duplicate entry.
+      const existingIndex = catalog.findIndex(
+        (m) => m.name.toLowerCase() === name.toLowerCase()
+      );
+
+      let updatedCatalog;
+      let toastMsg;
+
+      if (existingIndex !== -1) {
+        updatedCatalog = catalog.map((m, i) =>
+          i === existingIndex
+            ? { ...m, stock: m.stock + incomingStock, price, discount,
+                batch: newBatch.trim() || m.batch,
+                expiry: newExpiry.trim() || m.expiry }
+            : m
+        );
+        toastMsg = `"${name}" stock updated (+${incomingStock})`;
+      } else {
+        const newItem = {
+          id: crypto.randomUUID(),
+          name,
+          category: newCategory,
+          price,
+          unit: newUnit.trim() || "strip",
+          looseAllowed: newLooseAllowed,
+          piecesPerUnit: newLooseAllowed ? piecesPerUnit : undefined,
+          stock: incomingStock,
+          discount,
+          barcode: newBarcode.trim() || undefined,
+          batch: newBatch.trim() || "",
+          expiry: newExpiry.trim() || "",
+        };
+        updatedCatalog = [...catalog, newItem];
+        toastMsg = `"${name}" added to stock`;
+      }
+
+      setCatalog(updatedCatalog);
+      await saveStock(shop.shopId, updatedCatalog);
+      setToast(toastMsg);
+      setTimeout(() => setToast(""), 2500);
+      resetAddForm();
+    } finally {
+      setIsAddingMedicine(false);
+    }
   }
 
   const visibleItems = visibleIds.map(byId).filter(Boolean);
@@ -876,8 +904,14 @@ function OwnerDashboard({
             </View>
           </View>
 
-          <TouchableOpacity style={[styles.confirmBtn, { marginTop: 12 }]} onPress={addNewMedicine}>
-            <Text style={styles.confirmBtnText}>Save medicine to stock</Text>
+          <TouchableOpacity
+            style={[styles.confirmBtn, { marginTop: 12 }, isAddingMedicine && { opacity: 0.6 }]}
+            onPress={addNewMedicine}
+            disabled={isAddingMedicine}
+          >
+            <Text style={styles.confirmBtnText}>
+              {isAddingMedicine ? "Saving..." : "Save medicine to stock"}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
