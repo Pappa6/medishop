@@ -1,0 +1,38 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Shop {
+  id          String   @id @default(uuid())
+  shopId      String   @unique  // matches auth-service User.shopId
+  name        String
+  ownerEmail  String
+  address     String?
+  city        String?
+  phone       String?
+  gstin       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  staff       Staff[]
+}
+
+model Staff {
+  id        String   @id @default(uuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [shopId])
+  name      String
+  role      StaffRole @default(COUNTER)
+  createdAt DateTime @default(now())
+
+  @@index([shopId])
+}
+
+enum StaffRole {
+  COUNTER
+  OWNER
+}

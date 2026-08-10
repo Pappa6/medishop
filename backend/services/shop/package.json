@@ -1,0 +1,24 @@
+{
+  "name": "medishop-shop-service",
+  "version": "1.0.0",
+  "description": "MediShop Shop Service — multi-tenant pharmacy registry",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "migrate": "npx prisma migrate deploy",
+    "migrate:dev": "npx prisma migrate dev"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.0",
+    "express": "^4.19.2",
+    "express-validator": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "dotenv": "^16.4.5",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "prisma": "^5.16.0"
+  }
+}

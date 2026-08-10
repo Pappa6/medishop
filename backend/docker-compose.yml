@@ -1,0 +1,115 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: medishop-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: medishop
+      POSTGRES_PASSWORD: medishop_secret
+      POSTGRES_DB: medishop
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U medishop']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: medishop-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: medishop-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: medishop
+      RABBITMQ_DEFAULT_PASS: medishop_secret
+    ports:
+      - '5672:5672'
+      - '15672:15672'   # management UI at http://localhost:15672
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', 'ping']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  gateway:
+    build: ./services/gateway
+    container_name: medishop-gateway
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+    environment:
+      PORT: 4000
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_SERVICE_URL: http://auth:3001
+      SHOP_SERVICE_URL: http://shop:3002
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:4000/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  auth:
+    build: ./services/auth
+    container_name: medishop-auth
+    restart: unless-stopped
+    ports:
+      - '3001:3001'
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://medishop:medishop_secret@postgres:5432/medishop_auth
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      ACCESS_TOKEN_EXPIRY: 15m
+      REFRESH_TOKEN_EXPIRY: 30d
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  shop:
+    build: ./services/shop
+    container_name: medishop-shop
+    restart: unless-stopped
+    ports:
+      - '3002:3002'
+    environment:
+      PORT: 3002
+      DATABASE_URL: postgresql://medishop:medishop_secret@postgres:5432/medishop_shop
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

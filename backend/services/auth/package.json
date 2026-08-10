@@ -1,0 +1,26 @@
+{
+  "name": "medishop-auth-service",
+  "version": "1.0.0",
+  "description": "MediShop Authentication Service — register, login, JWT, PIN management",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "migrate": "npx prisma migrate deploy",
+    "migrate:dev": "npx prisma migrate dev"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.16.0",
+    "bcrypt": "^5.1.1",
+    "express": "^4.19.2",
+    "express-validator": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "redis": "^4.6.15",
+    "dotenv": "^16.4.5",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4",
+    "prisma": "^5.16.0"
+  }
+}
