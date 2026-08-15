@@ -21,7 +21,13 @@ import {
   formatStock,
   GST_PERCENT,
 } from "./src/catalog";
-import { loadStock, saveStock, loadLog, saveLog, loadPending, savePending, loadSettings, saveSettings } from "./src/storage";
+import {
+  watchStock, saveMedicine, replaceAllStock,
+  watchLog,
+  watchPending, addPendingEntry, deletePendingEntry,
+  approveSaleTransaction, voidSaleTransaction,
+  loadSettings, saveSettings,
+} from "./src/storage";
 import { watchAuthState, logOutShop } from "./src/auth";
 import AuthScreen from "./src/AuthScreen";
 import BarcodeScanner from "./src/BarcodeScanner";
@@ -110,12 +116,19 @@ export default function App() {
 
   useEffect(() => {
     if (!shop) return;
-    (async () => {
-      setCatalog(await loadStock(shop.shopId));
-      setLog(await loadLog(shop.shopId));
-      setPending(await loadPending(shop.shopId));
-      setSettings(await loadSettings(shop.shopId));
-    })();
+    // Real-time subscriptions — all three stay live for the session so every
+    // counter sees additions/removals made by other counters immediately.
+    const unsubStock = watchStock(shop.shopId, setCatalog);
+    const unsubLog = watchLog(shop.shopId, setLog);
+    const unsubPending = watchPending(shop.shopId, setPending);
+    // Settings don't change during a session (PIN change logs you back out),
+    // so a one-time load is enough.
+    loadSettings(shop.shopId).then(setSettings);
+    return () => {
+      unsubStock();
+      unsubLog();
+      unsubPending();
+    };
   }, [shop]);
 
   if (!authChecked) {
@@ -289,10 +302,8 @@ export default function App() {
       patientName: patientName.trim(),
       doctorName: doctorName.trim(),
     };
-    const updatedPending = [...pending, entry];
-
-    setPending(updatedPending);
-    await savePending(shop.shopId, updatedPending);
+    await addPendingEntry(shop.shopId, entry);
+    // No manual setPending — watchPending onSnapshot updates it automatically.
 
     setCart({});
     setQtyInputs({});
@@ -306,36 +317,27 @@ export default function App() {
   }
 
   async function approveSale(entry) {
-    const updatedCatalog = catalog.map((m) => {
-      const sold = entry.items.find((it) => it.id === m.id);
-      return sold ? { ...m, stock: m.stock - sold.qty } : m;
-    });
-    const updatedLog = [...log, entry];
-    const updatedPending = pending.filter((p) => p.id !== entry.id);
-
-    setCatalog(updatedCatalog);
-    setLog(updatedLog);
-    setPending(updatedPending);
-    await saveStock(shop.shopId, updatedCatalog);
-    await saveLog(shop.shopId, updatedLog);
-    await savePending(shop.shopId, updatedPending);
-
+    try {
+      // Single Firestore transaction: decrement stock + add log + delete pending.
+      // If stock ran out between submission and approval, the transaction throws
+      // and nothing is written.
+      await approveSaleTransaction(shop.shopId, entry);
+      // No manual setCatalog/setLog/setPending — onSnapshot updates them.
+    } catch (e) {
+      Alert.alert("Could not approve", e.message || "Check stock levels and try again.");
+      return;
+    }
     await printOrShareBill(entry);
   }
 
   async function rejectSale(entry) {
-    const updatedPending = pending.filter((p) => p.id !== entry.id);
-    setPending(updatedPending);
-    await savePending(shop.shopId, updatedPending);
+    await deletePendingEntry(shop.shopId, entry.id);
+    // No manual setPending — onSnapshot updates it.
   }
 
   async function voidEntry(entry) {
-    const restoredCatalog = catalog.map((m) => {
-      const sold = entry.items.find((it) => it.id === m.id);
-      return sold ? { ...m, stock: m.stock + sold.qty } : m;
-    });
     const reversal = {
-      id: crypto.randomUUID(), // Fix #7
+      id: crypto.randomUUID(),
       type: "reversal",
       linkedTo: entry.id,
       counter: entry.counter,
@@ -344,13 +346,14 @@ export default function App() {
       total: -entry.total,
       reason: reasonText || "No reason given",
     };
-    const updatedLog = log.map((e) => (e.id === entry.id ? { ...e, voided: true } : e));
-    updatedLog.push(reversal);
-
-    setCatalog(restoredCatalog);
-    setLog(updatedLog);
-    await saveStock(shop.shopId, restoredCatalog);
-    await saveLog(shop.shopId, updatedLog);
+    try {
+      // Single transaction: restore stock + mark original voided + add reversal.
+      await voidSaleTransaction(shop.shopId, entry, reversal);
+      // No manual setCatalog/setLog — onSnapshot updates them.
+    } catch (e) {
+      Alert.alert("Could not void", e.message || "Try again.");
+      return;
+    }
     setActiveVoidId(null);
     setReasonText("");
   }
@@ -390,8 +393,8 @@ export default function App() {
   }
 
   async function loadDefaultCatalogNow() {
-    setCatalog(DEFAULT_CATALOG);
-    await saveStock(shop.shopId, DEFAULT_CATALOG);
+    await replaceAllStock(shop.shopId, DEFAULT_CATALOG);
+    // No manual setCatalog — watchStock onSnapshot updates it.
     setToast("Latest medicine catalog loaded (" + DEFAULT_CATALOG.length + " items)");
     setTimeout(() => setToast(""), 2500);
   }
@@ -457,9 +460,8 @@ export default function App() {
       expiry: newExpiry.trim() || "",
     };
 
-    const updatedCatalog = [...catalog, newItem];
-    setCatalog(updatedCatalog);
-    await saveStock(shop.shopId, updatedCatalog);
+    await saveMedicine(shop.shopId, newItem);
+    // No manual setCatalog — watchStock onSnapshot updates it.
     setToast(`"${name}" added to stock`);
     setTimeout(() => setToast(""), 2000);
     resetAddForm();

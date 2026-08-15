@@ -4,7 +4,7 @@ import {
   signOut,
   onAuthStateChanged,
 } from "firebase/auth";
-import { doc, setDoc, getDoc } from "firebase/firestore";
+import { doc, setDoc, getDoc, writeBatch } from "firebase/firestore";
 import { auth, db } from "./firebaseConfig";
 import { DEFAULT_CATALOG } from "./catalog";
 import { hashPin } from "./pin";
@@ -17,15 +17,15 @@ export async function signUpShop(shopName, email, password) {
     name: shopName,
     createdAt: Date.now(),
   });
-  await setDoc(doc(db, "shops", shopId, "data", "stock"), {
-    items: DEFAULT_CATALOG,
+  // Write each medicine as its own document in the stock subcollection.
+  // salesLog and pendingSales subcollections start empty — Firestore creates
+  // them lazily on first write, so no placeholder docs needed.
+  const stockBatch = writeBatch(db);
+  DEFAULT_CATALOG.forEach((m) => {
+    const { id, ...data } = m;
+    stockBatch.set(doc(db, "shops", shopId, "stock", id), data);
   });
-  await setDoc(doc(db, "shops", shopId, "data", "salesLog"), {
-    entries: [],
-  });
-  await setDoc(doc(db, "shops", shopId, "data", "pendingSales"), {
-    entries: [],
-  });
+  await stockBatch.commit();
   // Fix #3: pinChangeRequired forces the owner to set a real PIN before
   // they can use the dashboard. The default "0000" is only ever stored as
   // a PBKDF2 hash (fix #1), but any default PIN is a risk if forgotten to
