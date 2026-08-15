@@ -41,6 +41,28 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+function toWords(n) {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven",
+    "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen",
+    "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tensArr = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  function helper(num) {
+    if (num === 0) return "";
+    if (num < 20) return ones[num] + " ";
+    if (num < 100) return tensArr[Math.floor(num / 10)] + (num % 10 ? " " + ones[num % 10] : "") + " ";
+    if (num < 1000) return ones[Math.floor(num / 100)] + " Hundred " + helper(num % 100);
+    if (num < 100000) return helper(Math.floor(num / 1000)) + "Thousand " + helper(num % 1000);
+    if (num < 10000000) return helper(Math.floor(num / 100000)) + "Lakh " + helper(num % 100000);
+    return helper(Math.floor(num / 10000000)) + "Crore " + helper(num % 10000000);
+  }
+  if (n <= 0) return "Zero Rupees Only";
+  const rupees = Math.floor(n);
+  const paisa = Math.round((n - rupees) * 100);
+  let result = helper(rupees).trim() + " Rupees";
+  if (paisa > 0) result += " and " + helper(paisa).trim() + " Paise";
+  return result + " Only";
+}
+
 export default function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [shop, setShop] = useState(null);
@@ -334,7 +356,7 @@ export default function App() {
   }
 
   async function printOrShareBill(sale) {
-    const html = buildBillHtml(sale, shop);
+    const html = buildBillHtml(sale, shop, settings);
     try {
       await Print.printAsync({ html });
     } catch (e) {
@@ -343,6 +365,14 @@ export default function App() {
         await Sharing.shareAsync(uri);
       }
     }
+  }
+
+  async function saveShopDetails(details) {
+    const updatedSettings = { ...settings, ...details };
+    setSettings(updatedSettings);
+    await saveSettings(shop.shopId, updatedSettings);
+    setToast("Shop details saved");
+    setTimeout(() => setToast(""), 2000);
   }
 
   // Returns true on success, false on validation failure.
@@ -456,7 +486,7 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.headerRow}>
           <View>
-            <Text style={styles.shopName}>{shop.shopName}</Text>
+            <Text style={styles.shopName}>{(settings && settings.shopDisplayName) || shop.shopName || "Your shop"}</Text>
             <Text style={styles.roleTag}>{role.label}</Text>
           </View>
           <View style={{ flexDirection: "row", gap: 8 }}>
@@ -485,6 +515,8 @@ export default function App() {
             approveSale={approveSale}
             rejectSale={rejectSale}
             changeOwnerPin={changeOwnerPin}
+            settings={settings}
+            saveShopDetails={saveShopDetails}
             activeVoidId={activeVoidId}
             setActiveVoidId={setActiveVoidId}
             reasonText={reasonText}
@@ -715,6 +747,7 @@ function MandatoryPinChangeScreen({ changeOwnerPin, onDone }) {
 
 function OwnerDashboard({
   catalog, log, pending, approveSale, rejectSale, changeOwnerPin,
+  settings, saveShopDetails,
   activeVoidId, setActiveVoidId, reasonText, setReasonText, voidEntry,
   onLoadDefaultCatalog, showAddForm, setShowAddForm,
   newName, setNewName, newCategory, setNewCategory,
@@ -728,6 +761,22 @@ function OwnerDashboard({
   const categoryEntries = Object.entries(CATEGORY_LABELS);
   const [newPin1, setNewPin1] = useState("");
   const [newPin2, setNewPin2] = useState("");
+
+  const [shopDetailsLoaded, setShopDetailsLoaded] = useState(false);
+  const [shopDisplayName, setShopDisplayName] = useState("");
+  const [address, setAddress] = useState("");
+  const [regNo, setRegNo] = useState("");
+  const [phone, setPhone] = useState("");
+
+  useEffect(() => {
+    if (!shopDetailsLoaded && settings) {
+      setShopDisplayName(settings.shopDisplayName || "");
+      setAddress(settings.address || "");
+      setRegNo(settings.regNo || "");
+      setPhone(settings.phone || "");
+      setShopDetailsLoaded(true);
+    }
+  }, [settings, shopDetailsLoaded]);
 
   async function submitPinChange() {
     if (newPin1 !== newPin2) {
@@ -945,6 +994,30 @@ function OwnerDashboard({
         ))}
       </View>
 
+      <Text style={styles.sectionLabel}>Shop details (printed on every bill)</Text>
+      <View style={styles.panel}>
+        <Text style={styles.formLabel}>Shop display name</Text>
+        <TextInput style={styles.formInput} placeholder="e.g. Krishna Medical Store" value={shopDisplayName} onChangeText={setShopDisplayName} />
+        <Text style={styles.formLabel}>Address</Text>
+        <TextInput style={styles.formInput} placeholder="e.g. 12, MG Road, Mumbai" value={address} onChangeText={setAddress} />
+        <View style={styles.formRow}>
+          <View style={{ flex: 1, marginRight: 6 }}>
+            <Text style={styles.formLabel}>Drug Lic. / Reg. No.</Text>
+            <TextInput style={styles.formInput} placeholder="e.g. DL-MH-123456" value={regNo} onChangeText={setRegNo} />
+          </View>
+          <View style={{ flex: 1, marginLeft: 6 }}>
+            <Text style={styles.formLabel}>Phone</Text>
+            <TextInput style={styles.formInput} placeholder="e.g. 9876543210" keyboardType="phone-pad" value={phone} onChangeText={setPhone} />
+          </View>
+        </View>
+        <TouchableOpacity
+          style={[styles.confirmBtn, { marginTop: 10 }]}
+          onPress={() => saveShopDetails({ shopDisplayName, address, regNo, phone })}
+        >
+          <Text style={styles.confirmBtnText}>Save shop details</Text>
+        </TouchableOpacity>
+      </View>
+
       <Text style={styles.sectionLabel}>Owner settings</Text>
       <View style={styles.panel}>
         <Text style={styles.formLabel}>Change owner PIN (4–6 digits)</Text>
@@ -978,41 +1051,91 @@ function OwnerDashboard({
 
 // Fix #5: All user-supplied values are passed through escapeHtml() before
 // being interpolated into the HTML string for the printed bill.
-function buildBillHtml(sale, shop) {
+function buildBillHtml(sale, shop, settings) {
+  const displayName = escapeHtml(
+    (settings && settings.shopDisplayName) || shop.shopName || "Medical Shop"
+  );
+  const address = escapeHtml((settings && settings.address) || "");
+  const phone = escapeHtml((settings && settings.phone) || "");
+  const regNo = escapeHtml((settings && settings.regNo) || "");
+  const billNo = `INV-${String(sale.id).slice(0, 8).toUpperCase()}`;
+
   const rows = sale.items
     .map(
       (it) => `
       <tr>
-        <td>${escapeHtml(it.name)}</td>
-        <td style="text-align:center">${escapeHtml(it.qty)}</td>
-        <td style="text-align:center">${escapeHtml(it.batch || "—")}</td>
-        <td style="text-align:center">${escapeHtml(it.expiry || "—")}</td>
-        <td style="text-align:right">Rs. ${Math.round(it.unitPrice * it.qty)}</td>
+        <td style="padding:5px 6px; border:1px solid #ccc;">${escapeHtml(it.name)}</td>
+        <td style="padding:5px 6px; border:1px solid #ccc; text-align:center;">${escapeHtml(String(it.qty))}</td>
+        <td style="padding:5px 6px; border:1px solid #ccc; text-align:center;">${escapeHtml(it.batch || "—")}</td>
+        <td style="padding:5px 6px; border:1px solid #ccc; text-align:center;">${escapeHtml(it.expiry || "—")}</td>
+        <td style="padding:5px 6px; border:1px solid #ccc; text-align:right;">Rs. ${Math.round(it.unitPrice * it.qty)}</td>
       </tr>`
     )
     .join("");
+
   return `
     <html>
-      <body style="font-family: Arial, sans-serif; padding: 24px;">
-        <h2 style="margin-bottom:0">${escapeHtml(shop.shopName)}</h2>
-        <p style="color:#666; margin-top:4px">${escapeHtml(sale.date || "")} ${escapeHtml(sale.time || "")}</p>
-        <p>Patient: ${escapeHtml(sale.patientName || "—")} &nbsp;&nbsp; Doctor: ${escapeHtml(sale.doctorName || "—")}</p>
-        <table style="width:100%; border-collapse:collapse; margin-top:12px;">
+      <body style="font-family: Arial, sans-serif; padding: 24px; max-width: 600px; margin: 0 auto;">
+        <div style="text-align:center; border-bottom:2px solid #333; padding-bottom:12px; margin-bottom:14px;">
+          <h2 style="margin:0 0 4px 0;">${displayName}</h2>
+          ${address ? `<p style="margin:2px 0; font-size:13px;">${address}</p>` : ""}
+          ${phone ? `<p style="margin:2px 0; font-size:13px;">Ph: ${phone}</p>` : ""}
+          ${regNo ? `<p style="margin:2px 0; font-size:13px;">Reg. No: ${regNo}</p>` : ""}
+        </div>
+
+        <table style="width:100%; margin-bottom:12px;">
+          <tr>
+            <td><strong>Bill No:</strong> ${escapeHtml(billNo)}</td>
+            <td style="text-align:right;"><strong>Date:</strong> ${escapeHtml(sale.date || "")} ${escapeHtml(sale.time || "")}</td>
+          </tr>
+          <tr>
+            <td>Patient: ${escapeHtml(sale.patientName || "—")}</td>
+            <td style="text-align:right;">Doctor: ${escapeHtml(sale.doctorName || "—")}</td>
+          </tr>
+        </table>
+
+        <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
           <thead>
-            <tr style="border-bottom:1px solid #333;">
-              <th style="text-align:left">Medicine</th>
-              <th>Qty</th>
-              <th>Batch</th>
-              <th>Expiry</th>
-              <th style="text-align:right">Amount</th>
+            <tr style="background:#f0f0f0;">
+              <th style="padding:6px; border:1px solid #ccc; text-align:left;">Medicine</th>
+              <th style="padding:6px; border:1px solid #ccc; text-align:center;">Qty</th>
+              <th style="padding:6px; border:1px solid #ccc; text-align:center;">Batch</th>
+              <th style="padding:6px; border:1px solid #ccc; text-align:center;">Expiry</th>
+              <th style="padding:6px; border:1px solid #ccc; text-align:right;">Amount</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
-        <hr/>
-        <p>Subtotal: Rs. ${sale.subtotal.toFixed(2)}</p>
-        <p>GST (${sale.gstPercent}%): Rs. ${sale.gstAmount.toFixed(2)}</p>
-        <h3>Total: Rs. ${sale.total.toFixed(2)}</h3>
+
+        <table style="width:100%; margin-bottom:16px;">
+          <tr>
+            <td style="text-align:right; padding:3px 0;">Subtotal:</td>
+            <td style="text-align:right; padding:3px 0; width:130px;">Rs. ${sale.subtotal.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="text-align:right; padding:3px 0;">GST (${escapeHtml(String(sale.gstPercent))}%):</td>
+            <td style="text-align:right; padding:3px 0;">Rs. ${sale.gstAmount.toFixed(2)}</td>
+          </tr>
+          <tr style="font-weight:bold; font-size:15px; border-top:1px solid #333;">
+            <td style="text-align:right; padding:6px 0;">Total:</td>
+            <td style="text-align:right; padding:6px 0;">Rs. ${sale.total.toFixed(2)}</td>
+          </tr>
+        </table>
+
+        <p style="font-size:12px; color:#555; font-style:italic;">
+          Amount in words: ${escapeHtml(toWords(sale.total))}
+        </p>
+
+        <table style="width:100%; margin-top:40px;">
+          <tr>
+            <td style="width:50%; padding-top:4px; border-top:1px solid #333;">Signed by</td>
+            <td></td>
+          </tr>
+        </table>
+
+        <div style="text-align:center; border-top:1px solid #ccc; margin-top:24px; padding-top:8px; font-size:11px; color:#666;">
+          ${displayName}${regNo ? " &nbsp;·&nbsp; Reg. No: " + regNo : ""}
+        </div>
       </body>
     </html>`;
 }
