@@ -9,6 +9,7 @@ import {
   StyleSheet,
   StatusBar,
   Alert,
+  Linking,
 } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
@@ -316,7 +317,7 @@ export default function App() {
     setTimeout(() => setToast(""), 2500);
   }
 
-  async function approveSale(entry) {
+  async function approveSale(entry, mode) {
     try {
       // Single Firestore transaction: decrement stock + add log + delete pending.
       // If stock ran out between submission and approval, the transaction throws
@@ -327,7 +328,11 @@ export default function App() {
       Alert.alert("Could not approve", e.message || "Check stock levels and try again.");
       return;
     }
-    await printOrShareBill(entry);
+    if (mode === "whatsapp") {
+      await sendBillViaWhatsApp(entry, shop, settings);
+    } else {
+      await printOrShareBill(entry);
+    }
   }
 
   async function rejectSale(entry) {
@@ -356,6 +361,62 @@ export default function App() {
     }
     setActiveVoidId(null);
     setReasonText("");
+  }
+
+  async function sendBillViaWhatsApp(sale, shopInfo, shopSettings) {
+    const digits = (sale.patientMobile || "").replace(/\D/g, "");
+    if (!digits) {
+      Alert.alert("No mobile number", "This bill has no patient mobile number saved, so there's nothing to send it to.");
+      return;
+    }
+    // Assume a 10-digit number is an Indian mobile missing its country code;
+    // leave anything else (already has a country code) untouched.
+    const phone = digits.length === 10 ? `91${digits}` : digits;
+
+    const shopDisplayName =
+      (shopSettings && shopSettings.shopDisplayName) || (shopInfo && shopInfo.shopName) || "the shop";
+    const greeting = `Hi${sale.patientName ? " " + sale.patientName : ""}, your bill from ${shopDisplayName} is ready — sending it here as a PDF.`;
+
+    // Step A: open WhatsApp directly on the patient's chat. wa.me supports
+    // pre-filled text for a specific number, which is why this part CAN be
+    // fully automatic.
+    const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(greeting)}`;
+    const canOpen = await Linking.canOpenURL(waUrl);
+    if (!canOpen) {
+      Alert.alert("Couldn't open WhatsApp", "Make sure WhatsApp is installed on this device.");
+      return;
+    }
+    await Linking.openURL(waUrl);
+
+    if (!(await Sharing.isAvailableAsync())) {
+      return; // WhatsApp chat is still open with the greeting; nothing more we can do.
+    }
+
+    // Step B: WhatsApp has no public API that lets an app attach a file to
+    // an already-open, specific chat — that part has to stay manual. But
+    // because the correct chat was just opened in step A, it will appear
+    // as WhatsApp's top "recent chat" when the owner picks WhatsApp again
+    // from the share sheet below — so attaching is a fast, one-tap lookup
+    // instead of searching for the contact from scratch.
+    const html = buildBillHtml(sale, shopInfo, shopSettings);
+    const { uri } = await Print.printToFileAsync({ html });
+
+    Alert.alert(
+      "Now attach the bill PDF",
+      `WhatsApp should have opened ${sale.patientName || "the patient"}'s chat with a short message already sent. Tap "Attach PDF" below, choose WhatsApp again, and pick that same chat — it'll be at the top of the recent list.`,
+      [
+        { text: "Skip", style: "cancel" },
+        {
+          text: "Attach PDF",
+          onPress: async () => {
+            await Sharing.shareAsync(uri, {
+              mimeType: "application/pdf",
+              dialogTitle: "Send bill via WhatsApp",
+            });
+          },
+        },
+      ]
+    );
   }
 
   async function printOrShareBill(sale) {
@@ -823,10 +884,18 @@ function OwnerDashboard({
             <View style={styles.formRow}>
               <TouchableOpacity
                 style={[styles.confirmBtn, { flex: 1, marginRight: 6 }]}
-                onPress={() => approveSale(entry)}
+                onPress={() => approveSale(entry, "print")}
               >
                 <Text style={styles.confirmBtnText}>Approve & print</Text>
               </TouchableOpacity>
+              {!!entry.patientMobile && (
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { flex: 1, marginHorizontal: 6, backgroundColor: "#25D366" }]}
+                  onPress={() => approveSale(entry, "whatsapp")}
+                >
+                  <Text style={styles.confirmBtnText}>WhatsApp</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={[styles.voidBtn, { flex: 1, marginLeft: 6, alignItems: "center" }]}
                 onPress={() => rejectSale(entry)}
