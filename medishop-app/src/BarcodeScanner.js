@@ -62,7 +62,7 @@ export default function BarcodeScanner({ visible, onScanned, onClose }) {
               }}
               onBarcodeScanned={handleScan}
             />
-            <View style={styles.overlay} pointerEvents="box-none">
+            <View style={[styles.overlay, { pointerEvents: "box-none" }]}>
               <View style={styles.topBar}>
                 <TouchableOpacity style={styles.roundBtn} onPress={handleClose}>
                   <Text style={styles.roundBtnText}>✕</Text>

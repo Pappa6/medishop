@@ -90,6 +90,7 @@ export default function App() {
   const [showBillForm, setShowBillForm] = useState(false);
   const [patientName, setPatientName] = useState("");
   const [doctorName, setDoctorName] = useState("");
+  const [patientMobile, setPatientMobile] = useState("");
   const [toast, setToast] = useState("");
 
   const [showAddForm, setShowAddForm] = useState(false);
@@ -302,6 +303,7 @@ export default function App() {
       total: grandTotal,
       patientName: patientName.trim(),
       doctorName: doctorName.trim(),
+      patientMobile: patientMobile.trim(),
     };
     await addPendingEntry(shop.shopId, entry);
     // No manual setPending — watchPending onSnapshot updates it automatically.
@@ -313,6 +315,7 @@ export default function App() {
     setShowBillForm(false);
     setPatientName("");
     setDoctorName("");
+    setPatientMobile("");
     setToast("Bill sent to owner for approval");
     setTimeout(() => setToast(""), 2500);
   }
@@ -741,6 +744,13 @@ export default function App() {
                   placeholder="Doctor's name (optional)"
                   value={doctorName}
                   onChangeText={setDoctorName}
+                />
+                <TextInput
+                  style={[styles.reasonInput, { marginTop: 8 }]}
+                  placeholder="Patient mobile (optional)"
+                  value={patientMobile}
+                  onChangeText={setPatientMobile}
+                  keyboardType="phone-pad"
                 />
                 <TouchableOpacity style={[styles.confirmBtn, { marginTop: 10 }]} onPress={submitForApproval}>
                   <Text style={styles.confirmBtnText}>Send for owner's approval</Text>
