@@ -271,7 +271,10 @@ export default function App() {
   const grandTotal = Math.round((subtotal + gstAmount) * 100) / 100;
 
   function openBillForm() {
-    if (cartLines.length === 0) return;
+    if (cartLines.length === 0) {
+      Alert.alert("Cart is empty", "Add at least one medicine using the symptom buttons, search, or barcode scanner before generating a bill.");
+      return;
+    }
     setShowBillForm(true);
   }
 
