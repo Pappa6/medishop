@@ -1,5 +1,5 @@
 import { pbkdf2 } from "@noble/hashes/pbkdf2";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha256 } from "@noble/hashes/sha2";
 import * as Crypto from "expo-crypto";
 
 // Fix #1: PBKDF2 with a random salt instead of plain SHA-256.
