@@ -329,7 +329,7 @@ export default function App() {
     try {
       await addPendingEntry(shop.shopId, entry);
     } catch (e) {
-      Alert.alert("Failed to send", e.message || "Could not reach the server. Please try again.");
+      Alert.alert("Debug: addPendingEntry failed", String(e.message || e));
       return;
     }
 
@@ -480,7 +480,12 @@ export default function App() {
   }
 
   async function loadDefaultCatalogNow() {
-    await replaceAllStock(shop.shopId, DEFAULT_CATALOG);
+    try {
+      await replaceAllStock(shop.shopId, DEFAULT_CATALOG);
+    } catch (e) {
+      Alert.alert("Debug: replaceAllStock failed", String(e.message || e));
+      return;
+    }
     // No manual setCatalog — watchStock onSnapshot updates it.
     setToast("Latest medicine catalog loaded (" + DEFAULT_CATALOG.length + " items)");
     setTimeout(() => setToast(""), 2500);
