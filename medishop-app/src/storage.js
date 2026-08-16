@@ -1,5 +1,5 @@
 import {
-  collection, doc, query, orderBy,
+  collection, doc,
   onSnapshot, setDoc, deleteDoc, updateDoc, writeBatch,
   runTransaction, getDoc, getDocs,
 } from "firebase/firestore";
@@ -61,9 +61,11 @@ export function watchLog(shopId, callback) {
 // ---------------------------------------------------------------------------
 
 export function watchPending(shopId, callback) {
-  const ref = query(collection(db, "shops", shopId, "pendingSales"), orderBy("createdAt"));
+  const ref = collection(db, "shops", shopId, "pendingSales");
   return onSnapshot(ref, (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    docs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    callback(docs);
   });
 }
 
