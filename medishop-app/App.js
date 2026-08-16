@@ -294,6 +294,7 @@ export default function App() {
     // submitted in the same millisecond no longer collide.
     const entry = {
       id: crypto.randomUUID(),
+      createdAt: Date.now(),
       type: "sale",
       voided: false,
       counter: role.label,

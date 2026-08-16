@@ -61,7 +61,7 @@ export function watchLog(shopId, callback) {
 // ---------------------------------------------------------------------------
 
 export function watchPending(shopId, callback) {
-  const ref = query(collection(db, "shops", shopId, "pendingSales"), orderBy("time"));
+  const ref = query(collection(db, "shops", shopId, "pendingSales"), orderBy("createdAt"));
   return onSnapshot(ref, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
   });
