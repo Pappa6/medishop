@@ -290,6 +290,7 @@ export default function App() {
   }
 
   async function submitForApproval() {
+    Alert.alert("DEBUG", `submitForApproval called. cartLines: ${cartLines.length}, shopId: ${shop?.shopId}`);
     const itemsDetail = [];
     cartLines.forEach((l) => {
       itemsDetail.push({
