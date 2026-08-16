@@ -380,13 +380,18 @@ export default function App() {
     // Step A: open WhatsApp directly on the patient's chat. wa.me supports
     // pre-filled text for a specific number, which is why this part CAN be
     // fully automatic.
-    const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(greeting)}`;
-    const canOpen = await Linking.canOpenURL(waUrl);
-    if (!canOpen) {
+    const waUrl = `whatsapp://send?phone=${phone}&text=${encodeURIComponent(greeting)}`;
+    try {
+      const canOpen = await Linking.canOpenURL(waUrl);
+      if (!canOpen) {
+        Alert.alert("Couldn't open WhatsApp", "Make sure WhatsApp is installed on this device.");
+        return;
+      }
+      await Linking.openURL(waUrl);
+    } catch (e) {
       Alert.alert("Couldn't open WhatsApp", "Make sure WhatsApp is installed on this device.");
       return;
     }
-    await Linking.openURL(waUrl);
 
     if (!(await Sharing.isAvailableAsync())) {
       return; // WhatsApp chat is still open with the greeting; nothing more we can do.
