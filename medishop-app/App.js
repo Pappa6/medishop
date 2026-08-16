@@ -285,7 +285,10 @@ export default function App() {
         expiry: l.item.expiry || "",
       });
     });
-    if (itemsDetail.length === 0) return;
+    if (itemsDetail.length === 0) {
+      Alert.alert("Cart is empty", "Add at least one medicine before sending for approval.");
+      return;
+    }
 
     // Fix #7: crypto.randomUUID() instead of Date.now() — two bills
     // submitted in the same millisecond no longer collide.
