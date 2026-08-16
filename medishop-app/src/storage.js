@@ -1,7 +1,7 @@
 import {
   collection, doc,
   onSnapshot, setDoc, deleteDoc, updateDoc, writeBatch,
-  runTransaction, getDoc,
+  runTransaction, getDoc, getDocs,
 } from "firebase/firestore";
 import { db } from "./firebaseConfig";
 
@@ -21,6 +21,17 @@ export function watchStock(shopId, callback) {
 export async function saveMedicine(shopId, medicine) {
   const { id, ...data } = medicine;
   await setDoc(doc(db, "shops", shopId, "stock", id), data);
+}
+
+// Deletes every document in the stock subcollection — used when a real shop
+// wants to start from an empty inventory instead of the demo catalog. Does
+// not touch salesLog, pendingSales, or settings — only stock.
+export async function clearAllStock(shopId) {
+  const ref = collection(db, "shops", shopId, "stock");
+  const snap = await getDocs(ref);
+  const batch = writeBatch(db);
+  snap.docs.forEach((d) => batch.delete(d.ref));
+  await batch.commit();
 }
 
 // Replace the entire stock with a new list (owner "load default catalog").

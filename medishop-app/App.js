@@ -23,7 +23,7 @@ import {
   GST_PERCENT,
 } from "./src/catalog";
 import {
-  watchStock, saveMedicine, replaceAllStock,
+  watchStock, saveMedicine, replaceAllStock, clearAllStock,
   watchLog,
   watchPending, addPendingEntry, deletePendingEntry,
   approveSaleTransaction, voidSaleTransaction,
@@ -468,6 +468,25 @@ export default function App() {
     setTimeout(() => setToast(""), 2500);
   }
 
+  function clearCatalogNow() {
+    Alert.alert(
+      "Reset catalog to blank?",
+      "This permanently deletes every medicine currently in stock. This cannot be undone. Use this before adding a real shop's own inventory — not while demo data is still needed.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset",
+          style: "destructive",
+          onPress: async () => {
+            await clearAllStock(shop.shopId);
+            setToast("Catalog cleared — add your shop's medicines now.");
+            setTimeout(() => setToast(""), 2000);
+          },
+        },
+      ]
+    );
+  }
+
   function confirmLoadDefaultCatalog() {
     Alert.alert(
       "Load latest catalog?",
@@ -594,6 +613,7 @@ export default function App() {
             setReasonText={setReasonText}
             voidEntry={voidEntry}
             onLoadDefaultCatalog={confirmLoadDefaultCatalog}
+            onClearCatalog={clearCatalogNow}
             showAddForm={showAddForm}
             setShowAddForm={setShowAddForm}
             newName={newName}
@@ -827,7 +847,7 @@ function OwnerDashboard({
   catalog, log, pending, approveSale, rejectSale, changeOwnerPin,
   settings, saveShopDetails,
   activeVoidId, setActiveVoidId, reasonText, setReasonText, voidEntry,
-  onLoadDefaultCatalog, showAddForm, setShowAddForm,
+  onLoadDefaultCatalog, onClearCatalog, showAddForm, setShowAddForm,
   newName, setNewName, newCategory, setNewCategory,
   newUnit, setNewUnit, newPrice, setNewPrice,
   newStock, setNewStock, newDiscount, setNewDiscount,
@@ -845,6 +865,8 @@ function OwnerDashboard({
   const [address, setAddress] = useState("");
   const [regNo, setRegNo] = useState("");
   const [phone, setPhone] = useState("");
+  const [shopEmail, setShopEmail] = useState("");
+  const [shopGstNumber, setShopGstNumber] = useState("");
 
   useEffect(() => {
     if (!shopDetailsLoaded && settings) {
@@ -852,6 +874,8 @@ function OwnerDashboard({
       setAddress(settings.address || "");
       setRegNo(settings.regNo || "");
       setPhone(settings.phone || "");
+      setShopEmail(settings.email || "");
+      setShopGstNumber(settings.gstNumber || "");
       setShopDetailsLoaded(true);
     }
   }, [settings, shopDetailsLoaded]);
@@ -924,6 +948,9 @@ function OwnerDashboard({
 
       <TouchableOpacity style={styles.reloadBtn} onPress={onLoadDefaultCatalog}>
         <Text style={styles.reloadBtnText}>Load latest medicine catalog ({DEFAULT_CATALOG.length} items)</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.clearCatalogBtn} onPress={onClearCatalog}>
+        <Text style={styles.clearCatalogBtnText}>Reset catalog to blank</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.addBtn} onPress={() => setShowAddForm((v) => !v)}>
@@ -1092,13 +1119,23 @@ function OwnerDashboard({
             <TextInput style={styles.formInput} placeholder="e.g. DL-MH-123456" value={regNo} onChangeText={setRegNo} />
           </View>
           <View style={{ flex: 1, marginLeft: 6 }}>
+            <Text style={styles.formLabel}>GST Number</Text>
+            <TextInput style={styles.formInput} placeholder="e.g. 22AAAAA0000A1Z5" value={shopGstNumber} onChangeText={setShopGstNumber} autoCapitalize="characters" />
+          </View>
+        </View>
+        <View style={styles.formRow}>
+          <View style={{ flex: 1, marginRight: 6 }}>
             <Text style={styles.formLabel}>Phone</Text>
             <TextInput style={styles.formInput} placeholder="e.g. 9876543210" keyboardType="phone-pad" value={phone} onChangeText={setPhone} />
+          </View>
+          <View style={{ flex: 1, marginLeft: 6 }}>
+            <Text style={styles.formLabel}>Email (optional)</Text>
+            <TextInput style={styles.formInput} placeholder="e.g. shop@example.com" value={shopEmail} onChangeText={setShopEmail} keyboardType="email-address" autoCapitalize="none" />
           </View>
         </View>
         <TouchableOpacity
           style={[styles.confirmBtn, { marginTop: 10 }]}
-          onPress={() => saveShopDetails({ shopDisplayName, address, regNo, phone })}
+          onPress={() => saveShopDetails({ shopDisplayName, address, regNo, gstNumber: shopGstNumber.trim(), phone, email: shopEmail.trim() })}
         >
           <Text style={styles.confirmBtnText}>Save shop details</Text>
         </TouchableOpacity>
@@ -1144,6 +1181,8 @@ function buildBillHtml(sale, shop, settings) {
   const address = escapeHtml((settings && settings.address) || "");
   const phone = escapeHtml((settings && settings.phone) || "");
   const regNo = escapeHtml((settings && settings.regNo) || "");
+  const gstNumber = escapeHtml((settings && settings.gstNumber) || "");
+  const email = escapeHtml((settings && settings.email) || "");
   const billNo = `INV-${String(sale.id).slice(0, 8).toUpperCase()}`;
 
   const rows = sale.items
@@ -1165,8 +1204,8 @@ function buildBillHtml(sale, shop, settings) {
         <div style="text-align:center; border-bottom:2px solid #333; padding-bottom:12px; margin-bottom:14px;">
           <h2 style="margin:0 0 4px 0;">${displayName}</h2>
           ${address ? `<p style="margin:2px 0; font-size:13px;">${address}</p>` : ""}
-          ${phone ? `<p style="margin:2px 0; font-size:13px;">Ph: ${phone}</p>` : ""}
-          ${regNo ? `<p style="margin:2px 0; font-size:13px;">Reg. No: ${regNo}</p>` : ""}
+          ${(regNo || gstNumber) ? `<p style="margin:2px 0; font-size:13px;">${regNo ? "Reg. No: " + regNo : ""}${regNo && gstNumber ? " &nbsp;·&nbsp; " : ""}${gstNumber ? "GST: " + gstNumber : ""}</p>` : ""}
+          ${(phone || email) ? `<p style="margin:2px 0; font-size:13px;">${phone ? "Ph: " + phone : ""}${phone && email ? " &nbsp;·&nbsp; " : ""}${email ? email : ""}</p>` : ""}
         </div>
 
         <table style="width:100%; margin-bottom:12px;">
@@ -1220,7 +1259,7 @@ function buildBillHtml(sale, shop, settings) {
         </table>
 
         <div style="text-align:center; border-top:1px solid #ccc; margin-top:24px; padding-top:8px; font-size:11px; color:#666;">
-          ${displayName}${regNo ? " &nbsp;·&nbsp; Reg. No: " + regNo : ""}
+          ${displayName}${regNo ? " &nbsp;·&nbsp; Reg. No: " + regNo : ""}${gstNumber ? " &nbsp;·&nbsp; GST: " + gstNumber : ""}
         </div>
       </body>
     </html>`;
@@ -1264,6 +1303,8 @@ const styles = StyleSheet.create({
   panel: { backgroundColor: "#fafafa", borderRadius: 8, padding: 10, marginBottom: 10 },
   reloadBtn: { backgroundColor: "#eef2ff", borderWidth: 1, borderColor: "#4f46e5", borderRadius: 8, paddingVertical: 10, alignItems: "center", marginBottom: 10 },
   reloadBtnText: { fontSize: 12, color: "#4f46e5", fontWeight: "600" },
+  clearCatalogBtn: { backgroundColor: "#fff5f5", borderWidth: 1, borderColor: "#dc2626", borderRadius: 8, paddingVertical: 10, alignItems: "center", marginBottom: 10 },
+  clearCatalogBtnText: { fontSize: 12, color: "#dc2626", fontWeight: "600" },
   addBtn: { backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#059669", borderRadius: 8, paddingVertical: 10, alignItems: "center", marginBottom: 12 },
   addBtnText: { fontSize: 12, color: "#059669", fontWeight: "600" },
   addForm: { backgroundColor: "#fafafa", borderRadius: 8, padding: 12, marginBottom: 14 },
