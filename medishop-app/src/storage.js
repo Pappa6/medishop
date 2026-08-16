@@ -14,7 +14,7 @@ export function watchStock(shopId, callback) {
   const ref = collection(db, "shops", shopId, "stock");
   return onSnapshot(ref, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
+  }, (err) => console.error("[watchStock]", err));
 }
 
 // Add or update a single medicine document.
@@ -53,7 +53,7 @@ export function watchLog(shopId, callback) {
   const ref = collection(db, "shops", shopId, "salesLog");
   return onSnapshot(ref, (snap) => {
     callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
+  }, (err) => console.error("[watchLog]", err));
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ export function watchPending(shopId, callback) {
     const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     docs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     callback(docs);
-  });
+  }, (err) => console.error("[watchPending]", err));
 }
 
 // Write a single pending entry (counter submits a bill).
