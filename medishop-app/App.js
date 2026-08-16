@@ -165,12 +165,17 @@ export default function App() {
     }
   }
 
+  function switchRole(newRole) {
+    clearCounterState();
+    setRole(newRole);
+  }
+
   if (!role) {
     return (
       <RoleSelectScreen
         shopName={shop.shopName}
         verifyOwnerPin={verifyOwnerPin}
-        onSelectRole={setRole}
+        onSelectRole={switchRole}
       />
     );
   }
@@ -180,7 +185,7 @@ export default function App() {
     return (
       <MandatoryPinChangeScreen
         changeOwnerPin={changeOwnerPin}
-        onDone={() => setRole(null)}
+        onDone={() => switchRole(null)}
       />
     );
   }
@@ -270,6 +275,17 @@ export default function App() {
     setShowBillForm(true);
   }
 
+  function clearCounterState() {
+    setCart({});
+    setQtyInputs({});
+    setVisibleIds([]);
+    setSearchText("");
+    setShowBillForm(false);
+    setPatientName("");
+    setDoctorName("");
+    setPatientMobile("");
+  }
+
   async function submitForApproval() {
     const itemsDetail = [];
     cartLines.forEach((l) => {
@@ -279,8 +295,6 @@ export default function App() {
         qty: l.qty,
         soldAs: l.item.looseAllowed ? "loose (pieces)" : l.item.unit,
         unitPrice: unitPriceOf(l.item),
-        // Fix #8: use the medicine's actual batch and expiry instead of
-        // a randomly generated fake. Shows "—" when not yet recorded.
         batch: l.item.batch || "",
         expiry: l.item.expiry || "",
       });
@@ -290,8 +304,6 @@ export default function App() {
       return;
     }
 
-    // Fix #7: crypto.randomUUID() instead of Date.now() — two bills
-    // submitted in the same millisecond no longer collide.
     const entry = {
       id: crypto.randomUUID(),
       createdAt: Date.now(),
@@ -309,17 +321,15 @@ export default function App() {
       doctorName: doctorName.trim(),
       patientMobile: patientMobile.trim(),
     };
-    await addPendingEntry(shop.shopId, entry);
-    // No manual setPending — watchPending onSnapshot updates it automatically.
 
-    setCart({});
-    setQtyInputs({});
-    setVisibleIds([]);
-    setSearchText("");
-    setShowBillForm(false);
-    setPatientName("");
-    setDoctorName("");
-    setPatientMobile("");
+    try {
+      await addPendingEntry(shop.shopId, entry);
+    } catch (e) {
+      Alert.alert("Failed to send", e.message || "Could not reach the server. Please try again.");
+      return;
+    }
+
+    clearCounterState();
     setToast("Bill sent to owner for approval");
     setTimeout(() => setToast(""), 2500);
   }
@@ -591,7 +601,7 @@ export default function App() {
             )}
             <TouchableOpacity
               style={styles.smallBtn}
-              onPress={() => { setShowOwnerPanel(false); setRole(null); }}
+              onPress={() => { setShowOwnerPanel(false); switchRole(null); }}
             >
               <Text style={styles.smallBtnText}>Switch role</Text>
             </TouchableOpacity>
